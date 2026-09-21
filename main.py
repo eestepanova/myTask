@@ -1,5 +1,4 @@
 import json
-import os
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -114,16 +113,16 @@ def save_json(data: dict[str, Any], file_path: Path) -> None:
 
 def main() -> None:
     """Run the complete IP detection and upload workflow."""
-    yandex_token = os.getenv("YANDEX_DISK_TOKEN")
+    yandex_token = input("Введите токен Яндекс.Диска: ").strip()
     if not yandex_token:
-        print("Ошибка: не задана переменная окружения YANDEX_DISK_TOKEN")
+        print("Ошибка: токен Яндекс.Диска не введён")
         return
 
-    folder_name = os.getenv("YANDEX_DISK_FOLDER", "ip_detector")
+    folder_name = "ip_detector"
     file_name = "ip_info.json"
 
     ipify = IpifyClient()
-    ipinfo = IpInfoClient(token=os.getenv("IPINFO_TOKEN"))
+    ipinfo = IpInfoClient()
     yandex_disk = YandexDiskClient(token=yandex_token)
 
     try:

@@ -1,116 +1,145 @@
-import os
 import json
+import os
+import tempfile
+from pathlib import Path
+from typing import Any
+
 import requests
 
 
 class IpifyClient:
-    """Класс для работы с сервисом ipify для получения текущего IP."""
+    """Client for the ipify service."""
 
-    URL = "https://ipify.org"
+    API_URL = "https://api.ipify.org"
 
-    def get_current_ip(self) -> str:
-        """Получает текущий публичный IP-адрес."""
-        response = requests.get(self.URL)
+    def __init__(self, timeout: int = 10) -> None:
+        self.timeout = timeout
+
+    def get_ip(self) -> str:
+        """Return the current public IP address."""
+        response = requests.get(
+            self.API_URL,
+            params={"format": "json"},
+            timeout=self.timeout,
+        )
         response.raise_for_status()
-        return response.json().get("ip")
+        ip_address = response.json().get("ip")
+        if not ip_address:
+            raise ValueError("Сервис ipify не вернул IP-адрес")
+        return str(ip_address)
 
 
 class IpInfoClient:
-    """Класс для работы с сервисом ipinfo для геодетекции по IP."""
+    """Client for the IPinfo geolocation service."""
 
-    BASE_URL = "https://ipinfo.io/{}/geo"
+    API_URL = "https://ipinfo.io"
 
-    def get_geo_info(self, ip_address: str) -> dict:
-        """Получает географическую информацию по указанному IP."""
-        url = self.BASE_URL.format(ip_address)
-        response = requests.get(url)
+    def __init__(self, token: str | None = None, timeout: int = 10) -> None:
+        self.token = token
+        self.timeout = timeout
+
+    def get_geo(self, ip_address: str) -> dict[str, Any]:
+        """Return geolocation data for an IP address."""
+        headers = {}
+        if self.token:
+            headers["Authorization"] = f"Bearer {self.token}"
+
+        response = requests.get(
+            f"{self.API_URL}/{ip_address}/geo",
+            headers=headers,
+            timeout=self.timeout,
+        )
         response.raise_for_status()
-        return response.json()
+        data = response.json()
+        if not isinstance(data, dict):
+            raise ValueError("Сервис IPinfo вернул данные неверного формата")
+        return data
 
 
-class YandexDiskUploader:
-    """Класс для работы с Яндекс.Диском через REST API."""
+class YandexDiskClient:
+    """Client for folder creation and file upload to Yandex Disk."""
 
-    BASE_URL = "https://yandex.net"
+    API_URL = "https://cloud-api.yandex.net/v1/disk/resources"
 
-    def __init__(self, token: str):
-        self.headers = {
-            "Authorization": f"OAuth {token}",
-            "Content-Type": "application/json"
-        }
+    def __init__(self, token: str, timeout: int = 30) -> None:
+        self.headers = {"Authorization": f"OAuth {token}"}
+        self.timeout = timeout
 
-    def create_folder(self, folder_path: str) -> bool:
-        """Создает папку на Яндекс.Диске. Возвращает True в случае успеха."""
-        url = f"{self.BASE_URL}resources"
-        params = {"path": folder_path}
-        response = requests.put(url, headers=self.headers, params=params)
+    def create_folder(self, folder_path: str) -> None:
+        """Create a folder unless it already exists."""
+        response = requests.put(
+            self.API_URL,
+            headers=self.headers,
+            params={"path": folder_path},
+            timeout=self.timeout,
+        )
+        if response.status_code not in (201, 409):
+            response.raise_for_status()
 
-        # Заменили "in" на прямое сравнение, чтобы избежать ошибок форматирования
-        if response.status_code == 201 or response.status_code == 409:
-            return True
-        response.raise_for_status()
-        return False
-
-    def upload_file_from_memory(self, folder_path: str, filename: str, data: dict):
-        """Загружает JSON-данные из памяти напрямую на Яндекс.Диск без сохранения на диск."""
-        # 1. Получаем URL для загрузки
-        upload_url_endpoint = f"{self.BASE_URL}resources/upload"
-        full_path = f"{folder_path}/{filename}"
-        params = {"path": full_path, "overwrite": "true"}
-
-        response = requests.get(upload_url_endpoint, headers=self.headers, params=params)
+    def upload_file(
+            self,
+            local_path: Path,
+            disk_path: str,
+            overwrite: bool = True,
+    ) -> None:
+        """Request an upload URL and upload a local file."""
+        response = requests.get(
+            f"{self.API_URL}/upload",
+            headers=self.headers,
+            params={
+                "path": disk_path,
+                "overwrite": str(overwrite).lower(),
+            },
+            timeout=self.timeout,
+        )
         response.raise_for_status()
         upload_url = response.json().get("href")
+        if not upload_url:
+            raise ValueError("Яндекс.Диск не вернул ссылку для загрузки")
 
-        # Превращаем словарь в строку JSON в кодировке bytes
-        json_bytes = json.dumps(data, indent=4, ensure_ascii=False).encode('utf-8')
-
-        # 2. Отправляем байты данных по полученному URL
-        upload_response = requests.put(upload_url, data=json_bytes)
+        with local_path.open("rb") as file:
+            upload_response = requests.put(
+                upload_url,
+                data=file,
+                timeout=self.timeout,
+            )
         upload_response.raise_for_status()
 
 
-def main():
-    # Токен запрашивается у пользователя (или берется из переменных окружения),
-    # чтобы не коммитить его в публичный репозиторий GitHub
-    token = os.getenv("YANDEX_DISK_TOKEN") or input("Введите ваш Яндекс.Диск токен: ").strip()
+def save_json(data: dict[str, Any], file_path: Path) -> None:
+    """Save a dictionary as readable UTF-8 JSON."""
+    with file_path.open("w", encoding="utf-8") as file:
+        json.dump(data, file, ensure_ascii=False, indent=2)
 
-    if not token:
-        print("Ошибка: Токен Яндекс.Диска не может быть пустым.")
+
+def main() -> None:
+    """Run the complete IP detection and upload workflow."""
+    yandex_token = os.getenv("YANDEX_DISK_TOKEN")
+    if not yandex_token:
+        print("Ошибка: не задана переменная окружения YANDEX_DISK_TOKEN")
         return
 
-    folder_name = "IP_Geolocations"
-    file_name = "geo_info.json"
+    folder_name = os.getenv("YANDEX_DISK_FOLDER", "ip_detector")
+    file_name = "ip_info.json"
+
+    ipify = IpifyClient()
+    ipinfo = IpInfoClient(token=os.getenv("IPINFO_TOKEN"))
+    yandex_disk = YandexDiskClient(token=yandex_token)
 
     try:
-        # Инициализация клиентов
-        ipify = IpifyClient()
-        ipinfo = IpInfoClient()
-        uploader = YandexDiskUploader(token)
+        ip_address = ipify.get_ip()
+        geo_data = ipinfo.get_geo(ip_address)
 
-        # Шаг 1: Получаем свой IP
-        print("Получение текущего IP-адреса...")
-        current_ip = ipify.get_current_ip()
-        print(f"Ваш IP: {current_ip}")
+        yandex_disk.create_folder(folder_name)
+        with tempfile.TemporaryDirectory() as temp_directory:
+            local_path = Path(temp_directory) / file_name
+            save_json(geo_data, local_path)
+            disk_path = f"{folder_name}/{file_name}"
+            yandex_disk.upload_file(local_path, disk_path)
 
-        # Шаг 2: Получаем гео-данные по IP
-        print("Запрос географической информации...")
-        geo_data = ipinfo.get_geo_info(current_ip)
-
-        # Шаг 3: Создаем папку на Яндекс.Диске
-        print(f"Создание папки '{folder_name}' на Яндекс.Диске...")
-        uploader.create_folder(folder_name)
-
-        # Шаг 4: Загружаем данные (без создания промежуточных локальных файлов)
-        print(f"Загрузка файла {file_name} на Яндекс.Диск...")
-        uploader.upload_file_from_memory(folder_name, file_name, geo_data)
-
-        print(f"Успех! Файл '{folder_name}/{file_name}' успешно сохранен на вашем Яндекс.Диске.")
-
-    except requests.exceptions.HTTPError as http_err:
-        print( f"Произошла ошибка HTTP: {http_err}")
-    except Exception as e:
-        print(f"Произошла непредвиденная ошибка: {e}")
+        print(f"Файл успешно загружен на Яндекс.Диск: {disk_path}")
+    except (requests.RequestException, ValueError) as error:
+        print(f"Ошибка при работе с API: {error}")
 
 
 if __name__ == "__main__":

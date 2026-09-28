@@ -1,7 +1,9 @@
+"""Get IP geolocation and upload it to Yandex Disk."""
+
+import io
 import json
-import tempfile
-from pathlib import Path
-from typing import Any
+import os
+from typing import Any, BinaryIO, Optional
 
 import requests
 
@@ -33,7 +35,11 @@ class IpInfoClient:
 
     API_URL = "https://ipinfo.io"
 
-    def __init__(self, token: str | None = None, timeout: int = 10) -> None:
+    def __init__(
+        self,
+        token: Optional[str] = None,
+        timeout: int = 10,
+    ) -> None:
         self.token = token
         self.timeout = timeout
 
@@ -76,12 +82,12 @@ class YandexDiskClient:
             response.raise_for_status()
 
     def upload_file(
-            self,
-            local_path: Path,
-            disk_path: str,
-            overwrite: bool = True,
+        self,
+        file_stream: BinaryIO,
+        disk_path: str,
+        overwrite: bool = True,
     ) -> None:
-        """Request an upload URL and upload a local file."""
+        """Request an upload URL and upload a stream from memory."""
         response = requests.get(
             f"{self.API_URL}/upload",
             headers=self.headers,
@@ -96,33 +102,27 @@ class YandexDiskClient:
         if not upload_url:
             raise ValueError("Яндекс.Диск не вернул ссылку для загрузки")
 
-        with local_path.open("rb") as file:
-            upload_response = requests.put(
-                upload_url,
-                data=file,
-                timeout=self.timeout,
-            )
+        file_stream.seek(0)
+        upload_response = requests.put(
+            upload_url,
+            data=file_stream,
+            timeout=self.timeout,
+        )
         upload_response.raise_for_status()
-
-
-def save_json(data: dict[str, Any], file_path: Path) -> None:
-    """Save a dictionary as readable UTF-8 JSON."""
-    with file_path.open("w", encoding="utf-8") as file:
-        json.dump(data, file, ensure_ascii=False, indent=2)
 
 
 def main() -> None:
     """Run the complete IP detection and upload workflow."""
-    yandex_token = input("Введите токен Яндекс.Диска: ").strip()
+    yandex_token = os.getenv("YANDEX_TOKEN")
     if not yandex_token:
-        print("Ошибка: токен Яндекс.Диска не введён")
+        print("Ошибка: переменная окружения YANDEX_TOKEN не задана")
         return
 
     folder_name = "ip_detector"
     file_name = "ip_info.json"
 
     ipify = IpifyClient()
-    ipinfo = IpInfoClient()
+    ipinfo = IpInfoClient(token=os.getenv("IPINFO_TOKEN"))
     yandex_disk = YandexDiskClient(token=yandex_token)
 
     try:
@@ -130,11 +130,15 @@ def main() -> None:
         geo_data = ipinfo.get_geo(ip_address)
 
         yandex_disk.create_folder(folder_name)
-        with tempfile.TemporaryDirectory() as temp_directory:
-            local_path = Path(temp_directory) / file_name
-            save_json(geo_data, local_path)
-            disk_path = f"{folder_name}/{file_name}"
-            yandex_disk.upload_file(local_path, disk_path)
+        json_bytes = json.dumps(
+            geo_data,
+            ensure_ascii=False,
+            indent=2,
+        ).encode("utf-8")
+        file_stream = io.BytesIO(json_bytes)
+
+        disk_path = f"{folder_name}/{file_name}"
+        yandex_disk.upload_file(file_stream, disk_path)
 
         print(f"Файл успешно загружен на Яндекс.Диск: {disk_path}")
     except (requests.RequestException, ValueError) as error:

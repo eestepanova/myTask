@@ -1,5 +1,11 @@
 # Результат работы
 
+В Windows PowerShell необходимо задать токен Яндекс.Диска:
+
+```powershell
+$env:YANDEX_TOKEN="ваш_токен"
+python main.py
+
 Программа успешно создала на Яндекс.Диске папку `ip_detector`
 и загрузила в неё файл `ip_info.json`.
 
